@@ -598,3 +598,243 @@ const heroComponents = fixture.debugElement.queryAll(By.directive(HeroComponent)
 (<HeroComponent>heroComponents[0].componentInstance).delete.emit(undefined);
 ```
 
+## Raising events from Child Directives
+
+Alternatively, we can trigger a child event using the child component's `triggerEventHandler()`
+
+For example,
+```javascript
+heroComponents[0].triggerEventHandler('delete', null);
+```
+
+### Interfacing with Input Boxes
+
+Example of interfacing with input boxes (see comments):
+```javascript
+it('should add a new hero to the list when the add button is clicked', ()=> {
+    mockHeroService.getHeroes.and.returnValue(of(HEROES));
+    fixture.detectChanges();
+    const name = "Mr. Ice";
+    mockHeroService.addHero.and.returnValue(of({ id: 5, name: name, strength:4 }));
+    const inputElement = fixture.debugElement.query(By.css('input')).nativeElement;
+    const addButton = fixture.debugElement.queryAll(By.css('button'))[0];
+
+    inputElement.value = name; //simulates typing in the name
+    addButton.triggerEventHandler('click', null);  //simulates clicking the button
+    fixture.detectChanges(); //update the html bindings
+
+    const heroText = fixture.debugElement.query(By.css('ul')).nativeElement.textContent;
+    expect(heroText).toContain(name);
+});
+```
+
+### Testing with Activated Routes
+
+Don't test the framework - e.g., don't test routing
+
+Test that you are interacting with the framework correctly.
+
+Create mocks for ActivatedRoute and Location (imported from `@angular/common`)
+
+In order to test `NgModel`, the `Forms` module needs to be imported into the `TestBed`
+
+Example of testing Activated Route (and importing FormsModule for `ngModel`)
+```javascript
+import { TestBed, ComponentFixture } from "@angular/core/testing";
+import { HeroDetailComponent } from "./hero-detail.component";
+import { ActivatedRoute } from "@angular/router";
+import { HeroService } from "../hero.service";
+import {Location} from '@angular/common';
+import { of } from "rxjs";
+import { HeroComponent } from "../hero/hero.component";
+import { FormsModule } from "@angular/forms";
+
+describe('HeroDeatailComponent', () => {
+    let fixture: ComponentFixture<HeroDetailComponent>;
+    let mockActivatedRoute, mockHeroService, mockLocation;
+
+    beforeEach(() => {
+        mockActivatedRoute = {
+            snapshot: {
+                paramMap: { 
+                    get: () => {return '3'}
+                }
+            }
+        }
+        mockHeroService = jasmine.createSpyObj(['getHero','updateHero']);
+        mockLocation = jasmine.createSpyObj(['back']);
+
+        TestBed.configureTestingModule({
+            declarations: [HeroDetailComponent],
+            imports: [FormsModule],
+            providers: [
+                {provide: ActivatedRoute, useValue: mockActivatedRoute},
+                {provide: HeroService, useValue: mockHeroService},
+                {provide: Location, useValue: mockLocation}
+            ]
+        });
+        fixture = TestBed.createComponent(HeroDetailComponent);
+        mockHeroService.getHero.and.returnValue(of({ id:3, name: 'SuperDude', strength: 100 }));
+
+    });
+
+    it('should render hero name in an h2 tag', () => {
+        fixture.detectChanges();
+
+        expect(fixture.nativeElement.querySelector('h2').textContent).toContain('SUPERDUDE');
+    });
+});
+```
+
+### Mocking the RouterLink
+
+Create a fake `RouterLink` directive
+```javascript
+@Directive({
+    selector: '[routerLink]',
+    host: { '(click)' : 'onClick()' }
+})
+export class RouterLinkDirectiveStub {
+    @Input('routerLink') linkParams : any;
+    navigatedTo :any = null;
+
+    onClick(){
+        this.navigatedTo = this.linkParams;
+    }
+}
+```
+
+Add the fake router link directive to the `TestBed` declarations
+
+### Testing the RouterLink
+
+Example of testing the routerLink:
+```javascript
+    it('should have the correct route for the first hero', () => {
+        mockHeroService.getHeroes.and.returnValue(of(HEROES));
+        fixture.detectChanges();
+        const heroComponents = fixture.debugElement.queryAll(By.directive(HeroComponent));
+        
+        let routerLink = heroComponents[0]
+            .query(By.directive(RouterLinkDirectiveStub))
+            .injector.get(RouterLinkDirectiveStub);
+
+        heroComponents[0].query(By.css('a')).triggerEventHandler('click', null);
+
+        expect(routerLink.navigatedTo).toBe('/detail/1');
+    });
+```
+
+## Advanced Topics
+
+### Adding async code
+
+Add a debounce method - to prevent someone from continually clicking save and send requests to the server
+
+debounce function example:
+```javascript
+  function debounce(func, wait, immediate) {
+    var timeout;
+    return function() {
+      var context = this, args = arguments;
+      var later = function() {
+        timeout = null;
+        if (!immediate) func.apply(context, args);
+      };
+      var callNow = immediate && !timeout;
+      clearTimeout(timeout);
+      timeout = setTimeout(later, wait);
+      if (callNow) func.apply(context, args);
+    };
+  };
+```
+
+Update the function to use the `debounce` and set the function contents to a callback function
+
+For example:
+```javascript
+ save(): void {
+    debounce(() => {
+    this.heroService.updateHero(this.hero)
+      .subscribe(() => this.goBack());
+    }, 
+    250, 
+    false)();
+    }
+  }
+```
+
+### Basic Async Testing
+
+`fakeAsync` function - wrap callback fucntion into call to `fakeAsync` to treat all asynchronous code as synchronous
+
+use the `tick(<milliseconds>)` function to fast forward x milliseconds
+
+Example of `fakeAsync` and `tick()`:
+```javascript
+it('should call updateHero when save is called', fakeAsync (() => {
+    mockHeroService.updateHero.and.returnValue(of({}));
+    fixture.detectChanges();
+
+    fixture.componentInstance.save();
+    tick(250);
+    
+    expect(mockHeroService.updateHero).toHaveBeenCalled();
+}));
+```
+
+`flush()` - fast forward the clock for any waiting tasks
+
+Example using `flush()`:
+```javascript
+it('should call updateHero when save is called', fakeAsync (() => {
+    mockHeroService.updateHero.and.returnValue(of({}));
+    fixture.detectChanges();
+
+    fixture.componentInstance.save();
+    flush();
+
+    expect(mockHeroService.updateHero).toHaveBeenCalled();
+}));
+```
+
+### Using the async Helper function
+
+`Promises` are always asynchronous
+
+async function using a `Promise`:
+```javascript
+save(): void {
+    var p = new Promise((resolve) => {
+      this.heroService.updateHero(this.hero)
+        .subscribe(() => this.goBack());
+
+      resolve();
+    });
+  }
+```
+
+`fixture.whenStable()` - returns a promise when all promises inside the component that are outstanding have resolved
+
+Example of asserting withing the `async()` and using `.whenStable()`
+```javascript
+fixture.whenStable().then(() => {
+    expect(mockHeroService.updateHero).toHaveBeenCalled();
+});
+```
+
+`fakeAsync` can work with both a `Promise` and a `setTimeout()`.  `async()` only works with `Promises`
+
+### Code Coverage
+
+if the cli is installed globally - `ng test --code-coverage` 
+
+otherwise, add the following to your `package.json`:
+```javascript
+"genCode": "ng test --code-coverage"
+```
+and run `npm run gencode`
+
+generates a `coverage` folder in the project.  within there open `index.html` to get a graphical representation of the code coverage. The report is drillable down to highlighting coverage in the ts files.
+
+
